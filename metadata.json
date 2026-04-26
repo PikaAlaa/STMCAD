@@ -1,0 +1,6 @@
+{
+  "name": "CircuiSim Pro",
+  "description": "A web-based interactive electronics simulation tool inspired by Proteus and Tinkercad, featuring drag-and-drop components, real-time circuit analysis, and component flaw detection.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
