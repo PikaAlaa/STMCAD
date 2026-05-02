@@ -7,6 +7,73 @@ import { v4 as uuidv4 } from 'uuid';
 
 type InteractionMode = 'SELECT' | 'WIRE';
 
+const COMMON_STM32_CODE = `/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+*/
+#include "main.h"
+#include "st7789.h"
+
+#define ADC_BUFFER_SIZE 480 // 240 pixels wide * 2 (Ping-Pong buffer)
+uint16_t adc_buffer[ADC_BUFFER_SIZE];
+uint8_t data_ready_flag = 0; // 1 = First Half, 2 = Second Half
+
+// UI State Variables
+int time_scale = 1;
+int voltage_scale = 1;
+uint8_t hold_waveform = 0;
+
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc) {
+    if(!hold_waveform) data_ready_flag = 1;
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
+    if(!hold_waveform) data_ready_flag = 2;
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if(GPIO_Pin == GPIO_PIN_12) time_scale++;
+    else if(GPIO_Pin == GPIO_PIN_13) {
+        time_scale--;
+        if(time_scale < 1) time_scale = 1;
+    }
+    else if(GPIO_Pin == GPIO_PIN_14) voltage_scale++;
+    else if(GPIO_Pin == GPIO_PIN_15) hold_waveform = !hold_waveform;
+}
+
+int main(void) {
+  HAL_Init();
+  SystemClock_Config();
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_ADC1_Init();
+  MX_SPI1_Init();
+
+  ST7789_Init();
+  ST7789_FillScreen(COLOR_BLACK);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, ADC_BUFFER_SIZE);
+  uint16_t old_y[240] = {0};
+
+  while (1) {
+	  if (data_ready_flag > 0) {
+	       int start_index = (data_ready_flag == 1) ? 0 : 240;
+	       data_ready_flag = 0;
+	       for(int x = 0; x < 240; x++) {
+	           uint16_t raw_adc = adc_buffer[start_index + (x * time_scale)];
+	           uint16_t mapped_y = 240 - ((raw_adc * 240) / 4095);
+	           mapped_y = mapped_y * voltage_scale;
+	           if (mapped_y > 239) mapped_y = 239;
+	           ST7789_DrawPixel(x, old_y[x], COLOR_BLACK);
+	           ST7789_DrawPixel(x, mapped_y, COLOR_GREEN);
+	           old_y[x] = mapped_y;
+	       }
+	  }
+  }
+}`;
+
 export default function App() {
   const [components, setComponents] = useState<CircuitComponent[]>([]);
   const [wires, setWires] = useState<Wire[]>([]);
@@ -105,6 +172,142 @@ export default function App() {
           { id: uuidv4(), startComp: batId, startPin: 'pos', endComp: resId, endPin: 'p1' },
           { id: uuidv4(), startComp: resId, startPin: 'p2', endComp: ledId, endPin: 'anode' },
           { id: uuidv4(), startComp: ledId, startPin: 'cathode', endComp: batId, endPin: 'neg' }
+       ]);
+    } else if (exampleName === 'OSCILLOSCOPE_PROJECT') {
+       const stmId = uuidv4();
+       const screenId = uuidv4();
+       const bbId = uuidv4();
+       const sw1Id = uuidv4();
+       const sw2Id = uuidv4();
+       const sw3Id = uuidv4();
+       const sw4Id = uuidv4();
+       const analogSrcId = uuidv4();
+       const analogResId = uuidv4();
+
+       setComponents([
+          { id: bbId, type: 'BREADBOARD', x: 250, y: 350, rotation: 0, properties: {}, state: {} },
+          { id: stmId, type: 'STM32_BLACK_PILL', x: 150, y: 50, rotation: 0, properties: { vccVoltage: 3.3, code: COMMON_STM32_CODE }, state: {} },
+          { id: screenId, type: 'SPI_SCREEN', x: 500, y: 50, rotation: 0, properties: {}, state: {} },
+          { id: sw1Id, type: 'SWITCH', x: 50, y: 400, rotation: 0, properties: {}, state: { closed: false } }, // PB12
+          { id: sw2Id, type: 'SWITCH', x: 50, y: 450, rotation: 0, properties: {}, state: { closed: false } }, // PB13
+          { id: sw3Id, type: 'SWITCH', x: 50, y: 500, rotation: 0, properties: {}, state: { closed: false } }, // PB14
+          { id: sw4Id, type: 'SWITCH', x: 50, y: 550, rotation: 0, properties: {}, state: { closed: false } }, // PB15
+          { id: analogSrcId, type: 'BATTERY', x: 650, y: 350, rotation: 0, properties: { voltage: 5 }, state: {} },
+          { id: analogResId, type: 'RESISTOR', x: 650, y: 450, rotation: 90, properties: { resistance: 10000 }, state: {} },
+       ]);
+
+       setWires([
+          // -- POWER RAILS --
+          // STM32 Power to rails
+          { id: uuidv4(), startComp: stmId, startPin: '3v3_2', endComp: bbId, endPin: 'rail_bot_pos_0' },
+          { id: uuidv4(), startComp: stmId, startPin: 'gnd2', endComp: bbId, endPin: 'rail_bot_neg_0' },
+          
+          // Screen Power from rails
+          { id: uuidv4(), startComp: bbId, startPin: 'rail_bot_pos_15', endComp: screenId, endPin: 'vcc' },
+          { id: uuidv4(), startComp: bbId, startPin: 'rail_bot_neg_15', endComp: screenId, endPin: 'gnd' },
+          
+          // Switch Ground from rails
+          { id: uuidv4(), startComp: sw1Id, startPin: 'p1', endComp: bbId, endPin: 'rail_bot_neg_1' },
+          { id: uuidv4(), startComp: sw2Id, startPin: 'p1', endComp: bbId, endPin: 'rail_bot_neg_2' },
+          { id: uuidv4(), startComp: sw3Id, startPin: 'p1', endComp: bbId, endPin: 'rail_bot_neg_3' },
+          { id: uuidv4(), startComp: sw4Id, startPin: 'p1', endComp: bbId, endPin: 'rail_bot_neg_4' },
+
+          // -- COMPONENT INTERCONNECTS VIA COLUMNS --
+          
+          // Switches to STM (Buttons)
+          { id: uuidv4(), startComp: sw1Id, startPin: 'p2', endComp: bbId, endPin: 'col_top_0_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_0_e', endComp: stmId, endPin: 'pb12' },
+          { id: uuidv4(), startComp: sw2Id, startPin: 'p2', endComp: bbId, endPin: 'col_top_2_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_2_e', endComp: stmId, endPin: 'pb13' },
+          { id: uuidv4(), startComp: sw3Id, startPin: 'p2', endComp: bbId, endPin: 'col_top_4_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_4_e', endComp: stmId, endPin: 'pb14' },
+          { id: uuidv4(), startComp: sw4Id, startPin: 'p2', endComp: bbId, endPin: 'col_top_6_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_6_e', endComp: stmId, endPin: 'pb15' },
+
+          // Screen Data to STM
+          { id: uuidv4(), startComp: stmId, startPin: 'pa2', endComp: bbId, endPin: 'col_top_10_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_10_e', endComp: screenId, endPin: 'cs' },
+          { id: uuidv4(), startComp: stmId, startPin: 'pa4', endComp: bbId, endPin: 'col_top_12_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_12_e', endComp: screenId, endPin: 'res' },
+          { id: uuidv4(), startComp: stmId, startPin: 'pa3', endComp: bbId, endPin: 'col_top_14_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_14_e', endComp: screenId, endPin: 'dc' },
+          { id: uuidv4(), startComp: stmId, startPin: 'pa7', endComp: bbId, endPin: 'col_top_16_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_16_e', endComp: screenId, endPin: 'mosi' },
+          { id: uuidv4(), startComp: stmId, startPin: 'pa5', endComp: bbId, endPin: 'col_top_18_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_18_e', endComp: screenId, endPin: 'sck' },
+
+          // -- ANALOG FRONTEND --
+          { id: uuidv4(), startComp: analogSrcId, startPin: 'pos', endComp: analogResId, endPin: 'p1' },
+          { id: uuidv4(), startComp: analogResId, startPin: 'p2', endComp: bbId, endPin: 'col_top_25_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_25_e', endComp: stmId, endPin: 'pa0' },
+          { id: uuidv4(), startComp: analogSrcId, startPin: 'neg', endComp: bbId, endPin: 'rail_bot_neg_25' },
+       ]);
+    } else if (exampleName === 'OSCILLOSCOPE_PARALLEL') {
+       const stmId = uuidv4();
+       const screenId = uuidv4();
+       const bbId = uuidv4();
+       const sw1Id = uuidv4();
+       const sw2Id = uuidv4();
+       const sw3Id = uuidv4();
+       const sw4Id = uuidv4();
+       const analogSrcId = uuidv4();
+       const r1Id = uuidv4();
+       const r2Id = uuidv4();
+
+       setComponents([
+          { id: bbId, type: 'BREADBOARD', x: 250, y: 350, rotation: 0, properties: {}, state: {} },
+          { id: stmId, type: 'STM32_BLACK_PILL', x: 150, y: 50, rotation: 0, properties: { vccVoltage: 3.3, code: COMMON_STM32_CODE }, state: {} },
+          { id: screenId, type: 'SPI_SCREEN', x: 500, y: 50, rotation: 0, properties: {}, state: {} },
+          { id: sw1Id, type: 'SWITCH', x: 50, y: 400, rotation: 0, properties: {}, state: { closed: false } }, 
+          { id: sw2Id, type: 'SWITCH', x: 50, y: 450, rotation: 0, properties: {}, state: { closed: false } }, 
+          { id: sw3Id, type: 'SWITCH', x: 50, y: 500, rotation: 0, properties: {}, state: { closed: false } }, 
+          { id: sw4Id, type: 'SWITCH', x: 50, y: 550, rotation: 0, properties: {}, state: { closed: false } }, 
+          { id: analogSrcId, type: 'BATTERY', x: 750, y: 350, rotation: 0, properties: { voltage: 5 }, state: {} },
+          { id: r1Id, type: 'RESISTOR', x: 650, y: 420, rotation: 0, properties: { resistance: 5000 }, state: {} },
+          { id: r2Id, type: 'RESISTOR', x: 650, y: 480, rotation: 0, properties: { resistance: 5000 }, state: {} },
+       ]);
+
+       setWires([
+          // -- POWER RAILS --
+          { id: uuidv4(), startComp: stmId, startPin: '3v3_2', endComp: bbId, endPin: 'rail_bot_pos_0' },
+          { id: uuidv4(), startComp: stmId, startPin: 'gnd2', endComp: bbId, endPin: 'rail_bot_neg_0' },
+          
+          { id: uuidv4(), startComp: bbId, startPin: 'rail_bot_pos_15', endComp: screenId, endPin: 'vcc' },
+          { id: uuidv4(), startComp: bbId, startPin: 'rail_bot_neg_15', endComp: screenId, endPin: 'gnd' },
+          
+          { id: uuidv4(), startComp: sw1Id, startPin: 'p1', endComp: bbId, endPin: 'rail_bot_neg_1' },
+          { id: uuidv4(), startComp: sw2Id, startPin: 'p1', endComp: bbId, endPin: 'rail_bot_neg_2' },
+          { id: uuidv4(), startComp: sw3Id, startPin: 'p1', endComp: bbId, endPin: 'rail_bot_neg_3' },
+          { id: uuidv4(), startComp: sw4Id, startPin: 'p1', endComp: bbId, endPin: 'rail_bot_neg_4' },
+
+          // -- COMPONENT INTERCONNECTS --
+          { id: uuidv4(), startComp: sw1Id, startPin: 'p2', endComp: bbId, endPin: 'col_top_0_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_0_e', endComp: stmId, endPin: 'pb12' },
+          { id: uuidv4(), startComp: sw2Id, startPin: 'p2', endComp: bbId, endPin: 'col_top_2_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_2_e', endComp: stmId, endPin: 'pb13' },
+          { id: uuidv4(), startComp: sw3Id, startPin: 'p2', endComp: bbId, endPin: 'col_top_4_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_4_e', endComp: stmId, endPin: 'pb14' },
+          { id: uuidv4(), startComp: sw4Id, startPin: 'p2', endComp: bbId, endPin: 'col_top_6_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_6_e', endComp: stmId, endPin: 'pb15' },
+
+          { id: uuidv4(), startComp: stmId, startPin: 'pa2', endComp: bbId, endPin: 'col_top_10_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_10_e', endComp: screenId, endPin: 'cs' },
+          { id: uuidv4(), startComp: stmId, startPin: 'pa4', endComp: bbId, endPin: 'col_top_12_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_12_e', endComp: screenId, endPin: 'res' },
+          { id: uuidv4(), startComp: stmId, startPin: 'pa3', endComp: bbId, endPin: 'col_top_14_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_14_e', endComp: screenId, endPin: 'dc' },
+          { id: uuidv4(), startComp: stmId, startPin: 'pa7', endComp: bbId, endPin: 'col_top_16_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_16_e', endComp: screenId, endPin: 'mosi' },
+          { id: uuidv4(), startComp: stmId, startPin: 'pa5', endComp: bbId, endPin: 'col_top_18_a' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_18_e', endComp: screenId, endPin: 'sck' },
+
+          // -- ANALOG PARALLEL --
+          { id: uuidv4(), startComp: analogSrcId, startPin: 'pos', endComp: r1Id, endPin: 'p1' },
+          { id: uuidv4(), startComp: analogSrcId, startPin: 'pos', endComp: r2Id, endPin: 'p1' },
+          { id: uuidv4(), startComp: r1Id, startPin: 'p2', endComp: bbId, endPin: 'col_top_25_a' },
+          { id: uuidv4(), startComp: r2Id, startPin: 'p2', endComp: bbId, endPin: 'col_top_25_b' },
+          { id: uuidv4(), startComp: bbId, startPin: 'col_top_25_e', endComp: stmId, endPin: 'pa0' },
+          { id: uuidv4(), startComp: analogSrcId, startPin: 'neg', endComp: bbId, endPin: 'rail_bot_neg_25' },
        ]);
     }
   };
@@ -250,6 +453,9 @@ export default function App() {
                    <button className="px-4 py-2 text-left text-sm hover:bg-indigo-50 hover:text-indigo-700" onClick={() => loadExample('LED_BLINKS')}>The Led Blinks</button>
                    <button className="px-4 py-2 text-left text-sm hover:bg-indigo-50 hover:text-indigo-700" onClick={() => loadExample('NO_OPEN_CIRCUIT')}>No Open circuit</button>
                    <button className="px-4 py-2 text-left text-sm hover:bg-indigo-50 hover:text-indigo-700" onClick={() => loadExample('NO_SHORT_CIRCUIT')}>No Short circuit</button>
+                   <button className="px-4 py-2 text-left text-sm hover:bg-indigo-50 hover:text-indigo-700 font-semibold" onClick={() => loadExample('OSCILLOSCOPE_PROJECT')}>Oscilloscope Project</button>
+                   <button className="px-4 py-2 text-left text-sm hover:bg-indigo-50 hover:text-indigo-700" onClick={() => loadExample('OSCILLOSCOPE_SERIES')}>Oscilloscope: Series Resistors</button>
+                   <button className="px-4 py-2 text-left text-sm hover:bg-indigo-50 hover:text-indigo-700" onClick={() => loadExample('OSCILLOSCOPE_PARALLEL')}>Oscilloscope: Parallel Resistors</button>
                 </div>
              )}
           </div>
@@ -495,9 +701,20 @@ export default function App() {
                           {comp.state.burnt && <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-xl drop-shadow-md z-20">💥</span>}
                        </div>
                     ) : comp.type === 'SPI_SCREEN' ? (
-                       <div className="w-full h-full bg-red-600 relative p-1 rounded border-b-2 border-red-800">
-                          <div className={`w-full h-20 ${comp.state.on && !comp.state.burnt ? 'bg-white' : 'bg-zinc-800'} border-4 border-zinc-900 flex items-center justify-center overflow-hidden`}>
-                             {comp.state.on && !comp.state.burnt && <div className="text-[8px] text-black">Display ON</div>}
+                       <div className="w-full h-full bg-red-600 relative p-1 rounded border-b-2 border-red-800 flex flex-col">
+                          <div className={`w-full h-full ${comp.state.on && !comp.state.burnt ? 'bg-black' : 'bg-zinc-800'} border-4 border-zinc-900 flex items-center justify-center overflow-hidden relative`}>
+                             {comp.state.on && !comp.state.burnt && (
+                                <>
+                                  <svg viewBox="0 0 80 100" className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
+                                    <path d="M 0 50 Q 8 20, 16 50 T 32 50 T 48 50 T 64 50 T 80 50" stroke="#0f0" strokeWidth="1.5" fill="none" className="animate-pulse" />
+                                    <path d="M 0 25 L 80 25" stroke="#333" strokeWidth="0.5" strokeDasharray="2,2" />
+                                    <path d="M 0 50 L 80 50" stroke="#333" strokeWidth="0.5" strokeDasharray="2,2" />
+                                    <path d="M 0 75 L 80 75" stroke="#333" strokeWidth="0.5" strokeDasharray="2,2" />
+                                  </svg>
+                                  <div className="absolute top-1 right-1 text-[6px] text-green-500 font-mono">1.0V/Div</div>
+                                  <div className="absolute bottom-1 right-1 text-[6px] text-green-500 font-mono">10ms/Div</div>
+                                </>
+                             )}
                           </div>
                           {comp.state.burnt && <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-2xl drop-shadow-md z-20">💥</span>}
                        </div>
